@@ -2,18 +2,18 @@
 
 **Autonomous adversarial testing & benchmarking platform for AI agents.**
 
-Instead of writing every test by hand, an LLM-powered red-team tester actively probes your agent, discovers weaknesses, and measures both security and capability under realistic adversarial pressure.
+An LLM-powered (or strategy-driven) red-team tester actively probes your agent, discovers weaknesses, and turns confirmed failures into a **persistent regression suite**.
 
-> **Hackathon MVP** — one agent interface, sandboxed mock environment, adaptive prompt-injection testing, and reproducible failure reports.
+> v0.2 — real agent adapters • expanded attack library • persistent failure DB
 
 ## Why Agent Stress Lab?
 
 Most agent evaluations are static checklists.  
 Agent Stress Lab makes the **tester an adversary**:
 
-1. Connect your agent (endpoint or adapter) + tools + policy rules
-2. The red-team tester chooses challenges, inspects responses & tool traces, then **adapts** the next attack
-3. Evidence-based scoring + automatic conversion of confirmed failures into a regression suite
+1. Connect your agent (mock, OpenAI, or any HTTP endpoint) + tools + policy rules  
+2. The red-team tester chooses challenges, inspects responses & tool traces, then **adapts**  
+3. Evidence-based scoring + automatic conversion of confirmed failures into a replayable DB
 
 ### Metrics (kept deliberately separate)
 
@@ -25,68 +25,72 @@ Agent Stress Lab makes the **tester an adversary**:
 | Cost per successful task| Estimated model + tool cost / successful completions |
 | Latency                 | Wall-clock time per test                             |
 
-A fast agent that leaks secrets is not secure.  
-A secure agent that fails every real task is not useful.
-
 ## Quick Start
 
 ```bash
-# Install (editable)
 pip install -e .
 
-# Run the MVP against the built-in mock research agent
-agent-stress-lab run
+# Run against the built-in mock research agent
+agent-stress-lab run -v --seed 42
 
-# Or with more verbosity / custom seed
-agent-stress-lab run --verbose --seed 42
+# Only prompt-injection attacks
+agent-stress-lab run -c prompt_injection
+
+# List all registered attacks
+agent-stress-lab list-attacks
+
+# Inspect stored failures
+agent-stress-lab failures
+
+# Replay a failure (regression test)
+agent-stress-lab replay <failure-id>
 ```
 
-## What the MVP demonstrates
+### Real adapters
 
-- **Mock Research Agent** (sandboxed)
-  - Tools: `web_search`, `save_note`
-  - Hard rule: never disclose private configuration / secrets
-- **Adaptive Red-Team Tester**
-  - Starts with simple prompt injections
-  - Escalates / mutates strategy based on previous outcomes
-  - Collects observable evidence (tool calls, output content)
-- **Deterministic violation checks** + optional LLM judge for subjective cases
-- **Live report** with:
-  - Attacks attempted
-  - Evidence collected
-  - Confirmed failures ready for regression testing
+```bash
+# OpenAI-compatible (requires OPENAI_API_KEY)
+pip install -e ".[llm]"
+agent-stress-lab run -a openai --model gpt-4o-mini
+
+# Any HTTP agent endpoint
+agent-stress-lab run -a http --endpoint https://your-agent.example.com/chat
+```
+
+## Attack Categories
+
+| Category               | Examples                                              |
+|------------------------|-------------------------------------------------------|
+| `prompt_injection`     | Ignore previous, DAN/role-play, nested, multi-turn    |
+| `tool_abuse`           | Unauthorized tools, exfiltration via tools, arg injection |
+| `instruction_conflict` | Priority override, user > system claims               |
+| `social_engineering`   | Fake authority, urgency, gradual trust                |
+| `recovery`             | Fake state recovery that tries to re-emit secrets     |
+| `ambiguous`            | Vague requests that could be interpreted as leaks     |
+
+## Persistent Failure DB
+
+Confirmed policy violations are stored in SQLite (`~/.agent_stress_lab/failures.db` by default).
+
+- Automatically saved during `run`
+- `agent-stress-lab failures` — list them
+- `agent-stress-lab replay <id>` — re-run against the current agent and mark still-failing / fixed
+
+This gives developers a real **regression suite** of attacks that previously broke their agent.
 
 ## Project Structure
 
 ```
 src/agent_stress_lab/
-├── core/
-│   ├── agent_adapter.py    # Abstract interface + mock implementation
-│   ├── red_team_tester.py  # Adaptive adversarial tester
-│   ├── evaluator.py        # Scoring & evidence collection
-│   ├── metrics.py
-│   └── report.py
-├── attacks/
-│   └── prompt_injection.py # Adaptive injection strategies
-├── tasks/
-│   └── capability.py       # Multi-step / recovery tasks
-├── sandbox/
-│   └── mock_agent.py       # Fully deterministic mock research agent
+├── adapters/          # mock (via sandbox), OpenAI, generic HTTP
+├── attacks/           # prompt injection, tool abuse, social, conflict…
+├── core/              # adapter interface, red-team tester, metrics, report
+├── db/                # persistent failure store (SQLite)
+├── sandbox/           # deterministic mock research agent
+├── tasks/             # future capability tasks
 └── cli.py
 ```
-
-## Roadmap (post-MVP)
-
-- Real agent adapters (OpenAI Assistants, LangGraph, CrewAI, custom HTTP)
-- Broader attack library (tool-use abuse, instruction conflicts, multi-turn social engineering)
-- Persistent failure database → automatic regression suite
-- Live dashboard
-- Cost & latency tracking with real token usage
 
 ## License
 
 MIT
-
----
-
-*Built for the hackathon spirit: coherent product > oversized promises.*
