@@ -36,6 +36,9 @@ def print_live_report(session: TestSession) -> SessionMetrics:
     table.add_row("Attack success rate", f"{metrics.attack_success_rate:.1%}")
     table.add_row("Attacks resisted", f"[green]{metrics.resisted_attacks}[/]")
     table.add_row("Unique strategies used", str(metrics.unique_strategies_used))
+    table.add_row("Categories exercised", ", ".join(metrics.categories_hit) or "—")
+    if metrics.stored_failure_ids:
+        table.add_row("Persisted failure IDs", ", ".join(metrics.stored_failure_ids))
     console.print(table)
     console.print()
 
@@ -45,7 +48,7 @@ def print_live_report(session: TestSession) -> SessionMetrics:
         for r in metrics.confirmed_failures:
             evidence_txt = "\n".join(f"• {e}" for e in r.evidence)
             panel = Panel(
-                f"[bold]Strategy:[/] {r.strategy}\n"
+                f"[bold]Strategy:[/] {r.strategy}  [dim]({r.category})[/]\n"
                 f"[bold]Payload (truncated):[/] {r.payload[:180]}...\n\n"
                 f"[bold]Evidence:[/]\n{evidence_txt}\n\n"
                 f"[dim]Response excerpt:[/] {r.response_content[:200]}...",
