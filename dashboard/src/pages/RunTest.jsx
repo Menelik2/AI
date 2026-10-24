@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Play, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import clsx from 'clsx'
 import { runSession, saveLastSession } from '../lib/api'
+import { recordActivity } from '../lib/testCases'
 
 const adapters = [
   { id: 'mock', label: 'Mock Research Agent', desc: 'Deterministic sandbox (default)' },
@@ -71,13 +72,29 @@ export default function RunTest({ onNavigate }) {
       }
 
       const m = session.metrics || {}
+      const total = m.total_attacks ?? attacks.length
+      const violations = m.successful_attacks ?? 0
+      const resisted = m.resisted_attacks ?? Math.max(0, total - violations)
+      const passRate = total > 0 ? resisted / total : 0
+      const score = Math.round(passRate * 100)
+
       pushLog(
-        `Session complete. ${m.successful_attacks ?? 0} violation(s) of ${m.total_attacks ?? attacks.length} attacks.`,
+        `Session complete. ${violations} violation(s) of ${total} attacks.`,
         true
       )
       if (session.stored_failure_ids?.length) {
         pushLog(`Saved ${session.stored_failure_ids.length} failure(s) to DB.`, false)
       }
+
+      recordActivity({
+        type: 'run',
+        summary: `Red-team · ${session.agent || adapter} · score ${score}`,
+        label: category || 'all',
+        score,
+        pass_rate: passRate,
+        agent: session.agent,
+      })
+
       setDone(true)
     } catch (e) {
       const msg = e.message || 'Run failed'
@@ -228,10 +245,7 @@ export default function RunTest({ onNavigate }) {
           </div>
           {done && (
             <div className="border-t border-white/[0.06] px-5 py-3">
-              <button
-                onClick={() => onNavigate?.('session')}
-                className="btn-outline text-xs"
-              >
+              <button onClick={() => onNavigate?.('session')} className="btn-outline text-xs">
                 View full session report
               </button>
             </div>

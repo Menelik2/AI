@@ -8,6 +8,7 @@ import {
   Menu,
   X,
   Terminal,
+  FileStack,
 } from 'lucide-react'
 import clsx from 'clsx'
 import Overview from './pages/Overview'
@@ -15,9 +16,11 @@ import Failures from './pages/Failures'
 import Attacks from './pages/Attacks'
 import RunTest from './pages/RunTest'
 import SessionReport from './pages/SessionReport'
+import TestCases from './pages/TestCases'
 
 const nav = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'testcases', label: 'Test Cases', icon: FileStack },
   { id: 'session', label: 'Last Session', icon: Terminal },
   { id: 'failures', label: 'Failures', icon: ShieldAlert },
   { id: 'attacks', label: 'Attack Library', icon: Crosshair },
@@ -30,6 +33,7 @@ export default function App() {
 
   const Page = {
     overview: Overview,
+    testcases: TestCases,
     session: SessionReport,
     failures: Failures,
     attacks: Attacks,
@@ -38,7 +42,6 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar — desktop */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-white/[0.06] bg-surface-900 lg:flex">
         <div className="flex h-14 items-center gap-2.5 border-b border-white/[0.06] px-5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
@@ -46,7 +49,7 @@ export default function App() {
           </div>
           <div>
             <div className="text-sm font-semibold tracking-tight text-white">Agent Stress Lab</div>
-            <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">v0.2</div>
+            <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">v0.3</div>
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 p-3">
@@ -74,7 +77,6 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Mobile header */}
       <div className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-white/[0.06] bg-surface-900/95 px-4 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-accent/20">
@@ -91,7 +93,6 @@ export default function App() {
         </button>
       </div>
 
-      {/* Mobile drawer */}
       {mobileOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-black/60" onClick={() => setMobileOpen(false)} />
@@ -116,7 +117,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Main */}
       <main className="flex-1 lg:pl-60">
         <div className="mx-auto max-w-6xl px-4 pb-16 pt-20 lg:px-8 lg:pt-8">
           <Page onNavigate={setPage} />
