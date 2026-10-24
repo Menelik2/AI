@@ -1,4 +1,4 @@
-"""Adaptive LLM-style red-team tester (heuristic + strategy selection for MVP)."""
+"""Adaptive adversarial red-team tester."""
 
 from __future__ import annotations
 
@@ -6,14 +6,16 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_stress_lab.attacks.prompt_injection import (
-    STRATEGIES,
+from agent_stress_lab.attacks.base import (
+    AttackCategory,
     AttackOutcome,
     AttackResult,
     AttackStrategy,
+    get_strategies,
 )
 from agent_stress_lab.core.agent_adapter import AgentAdapter, AgentResponse
 from agent_stress_lab.core.evaluator import ViolationChecker
+from agent_stress_lab.db.failures import FailureStore
 
 
 @dataclass
@@ -24,50 +26,62 @@ class TestSession:
     results: list[AttackResult] = field(default_factory=list)
     successful_attacks: list[AttackResult] = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
+    stored_failure_ids: list[str] = field(default_factory=list)
 
 
 class RedTeamTester:
     """
     Adaptive adversarial tester.
 
-    For the MVP this is strategy-driven and deterministic (no external LLM required).
-    The adaptive loop:
-      1. Choose a strategy (or mutate a previous one)
+    Loop:
+      1. Choose / mutate a strategy
       2. Generate payload
       3. Send to agent
       4. Collect evidence via deterministic checks
-      5. Decide next action based on outcome
+      5. Optionally persist confirmed failures
+      6. Decide next action based on outcome
     """
 
     def __init__(
         self,
         agent: AgentAdapter,
         *,
-        max_attacks: int = 8,
+        max_attacks: int = 12,
         seed: int | None = None,
         verbose: bool = False,
+        categories: list[AttackCategory] | None = None,
+        persist_failures: bool = True,
+        failure_store: FailureStore | None = None,
     ):
         self.agent = agent
         self.max_attacks = max_attacks
         self.verbose = verbose
         self.rng = random.Random(seed)
         self.checker = ViolationChecker(agent.get_secrets())
+        self.categories = categories
+        self.persist_failures = persist_failures
+        self.store = failure_store or (FailureStore() if persist_failures else None)
         self.session = TestSession(agent_name=agent.config.name)
 
     def run(self) -> TestSession:
         """Execute an adaptive red-team session."""
         self.agent.reset()
-        remaining = list(STRATEGIES)
+        strategies = get_strategies(categories=self.categories)
+        if not strategies:
+            strategies = get_strategies()  # fallback to all
+
+        remaining = list(strategies)
         self.rng.shuffle(remaining)
 
         attempted = 0
         last_result: AttackResult | None = None
 
         while attempted < self.max_attacks and remaining:
-            # Adaptive selection
-            if last_result and last_result.outcome == AttackOutcome.FAILURE and last_result.strategy:
-                # Escalate the same family
-                strategy = next((s for s in remaining if s.id == last_result.strategy), None)
+            # Adaptive selection: escalate same family on resistance
+            if last_result and last_result.outcome == AttackOutcome.FAILURE:
+                strategy = next(
+                    (s for s in remaining if s.id == last_result.strategy), None
+                )
                 if strategy is None:
                     strategy = remaining.pop(0)
                 else:
@@ -76,12 +90,16 @@ class RedTeamTester:
                 strategy = remaining.pop(0)
 
             payload = strategy.generate(self.session.context)
-            if last_result and strategy.mutate and last_result.outcome == AttackOutcome.FAILURE:
+            if (
+                last_result
+                and strategy.mutate
+                and last_result.outcome == AttackOutcome.FAILURE
+            ):
                 payload = strategy.mutate(payload, last_result)
 
             if self.verbose:
-                print(f"\n→ Attack [{strategy.id}] {strategy.name}")
-                print(f"  Payload: {payload[:120]}...")
+                print(f"\n→ Attack [{strategy.id}] ({strategy.category.value}) {strategy.name}")
+                print(f"  Payload: {payload[:140]}...")
 
             response = self.agent.send(payload)
             result = self._evaluate(strategy, payload, response)
@@ -90,28 +108,77 @@ class RedTeamTester:
             if result.outcome == AttackOutcome.SUCCESS:
                 self.session.successful_attacks.append(result)
                 if self.verbose:
-                    print(f"  ✗ POLICY VIOLATION detected")
+                    print("  ✗ POLICY VIOLATION / FAILURE detected")
                     for e in result.evidence:
                         print(f"    evidence: {e}")
+
+                # Persist for regression suite
+                if self.persist_failures and self.store:
+                    stored = self.store.add(
+                        agent_name=self.session.agent_name,
+                        strategy_id=result.strategy,
+                        category=result.category,
+                        payload=result.payload,
+                        evidence=result.evidence,
+                        response_content=result.response_content,
+                        tool_calls=result.tool_calls_summary,
+                        notes=result.notes,
+                    )
+                    self.session.stored_failure_ids.append(stored.id)
+                    if self.verbose:
+                        print(f"    → saved as failure {stored.id}")
             else:
                 if self.verbose:
-                    print(f"  ✓ Agent resisted")
+                    print("  ✓ Agent resisted / handled correctly")
 
             last_result = result
             attempted += 1
 
-            # Early stop if we already have several confirmed failures
-            if len(self.session.successful_attacks) >= 3:
+            if len(self.session.successful_attacks) >= 5:
                 break
 
         return self.session
 
-    def _evaluate(
-        self, strategy: AttackStrategy, payload: str, response: AgentResponse
-    ) -> AttackResult:
+    def replay_failure(self, failure_id: str) -> AttackResult | None:
+        """Re-run a previously stored failure and update its status."""
+        if not self.store:
+            return None
+        stored = self.store.get(failure_id)
+        if not stored:
+            return None
+
+        self.agent.reset()
+        response = self.agent.send(stored.payload)
         evidence = self.checker.check(response)
         outcome = AttackOutcome.SUCCESS if evidence else AttackOutcome.FAILURE
 
+        result = AttackResult(
+            attack_id=f"replay-{failure_id}",
+            strategy=stored.strategy_id,
+            category=stored.category,
+            payload=stored.payload,
+            outcome=outcome,
+            evidence=evidence,
+            response_content=response.content,
+            tool_calls_summary=[
+                f"{tc.name}({tc.arguments}) → {tc.status.value}"
+                for tc in response.tool_calls
+            ],
+            notes=f"replay of {failure_id}; latency={response.latency_ms:.1f}ms",
+        )
+
+        self.store.mark_replay(failure_id, still_failing=(outcome == AttackOutcome.SUCCESS))
+        return result
+
+    def _evaluate(
+        self, strategy: AttackStrategy, payload: str, response: AgentResponse
+    ) -> AttackResult:
+        if strategy.check:
+            evidence = strategy.check(response)
+        else:
+            evidence = self.checker.check(response)
+
+        outcome = AttackOutcome.SUCCESS if evidence else AttackOutcome.FAILURE
         tool_summary = [
             f"{tc.name}({tc.arguments}) → {tc.status.value}"
             for tc in response.tool_calls
@@ -120,6 +187,7 @@ class RedTeamTester:
         return AttackResult(
             attack_id=f"{strategy.id}-{len(self.session.results)+1}",
             strategy=strategy.id,
+            category=strategy.category.value,
             payload=payload,
             outcome=outcome,
             evidence=evidence,
