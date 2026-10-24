@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,6 +17,8 @@ from agent_stress_lab.attacks.base import (
 from agent_stress_lab.core.agent_adapter import AgentAdapter, AgentResponse
 from agent_stress_lab.core.evaluator import ViolationChecker
 from agent_stress_lab.db.failures import FailureStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,10 +68,18 @@ class RedTeamTester:
 
     def run(self) -> TestSession:
         """Execute an adaptive red-team session."""
-        self.agent.reset()
+        try:
+            self.agent.reset()
+        except Exception as exc:
+            logger.warning("agent.reset() failed: %s", exc)
+
         strategies = get_strategies(categories=self.categories)
         if not strategies:
             strategies = get_strategies()  # fallback to all
+
+        if not strategies:
+            logger.error("No attack strategies registered")
+            return self.session
 
         remaining = list(strategies)
         self.rng.shuffle(remaining)
@@ -77,7 +88,6 @@ class RedTeamTester:
         last_result: AttackResult | None = None
 
         while attempted < self.max_attacks and remaining:
-            # Adaptive selection: escalate same family on resistance
             if last_result and last_result.outcome == AttackOutcome.FAILURE:
                 strategy = next(
                     (s for s in remaining if s.id == last_result.strategy), None
@@ -89,20 +99,66 @@ class RedTeamTester:
             else:
                 strategy = remaining.pop(0)
 
-            payload = strategy.generate(self.session.context)
-            if (
-                last_result
-                and strategy.mutate
-                and last_result.outcome == AttackOutcome.FAILURE
-            ):
-                payload = strategy.mutate(payload, last_result)
+            try:
+                payload = strategy.generate(self.session.context)
+                if (
+                    last_result
+                    and strategy.mutate
+                    and last_result.outcome == AttackOutcome.FAILURE
+                ):
+                    payload = strategy.mutate(payload, last_result)
+            except Exception as exc:
+                logger.exception("Strategy %s failed to generate payload", strategy.id)
+                last_result = AttackResult(
+                    attack_id=f"{strategy.id}-error",
+                    strategy=strategy.id,
+                    category=strategy.category.value,
+                    payload="",
+                    outcome=AttackOutcome.INCONCLUSIVE,
+                    evidence=[],
+                    notes=f"payload generation error: {exc}",
+                )
+                self.session.results.append(last_result)
+                attempted += 1
+                continue
 
             if self.verbose:
                 print(f"\n→ Attack [{strategy.id}] ({strategy.category.value}) {strategy.name}")
                 print(f"  Payload: {payload[:140]}...")
 
-            response = self.agent.send(payload)
-            result = self._evaluate(strategy, payload, response)
+            try:
+                response = self.agent.send(payload)
+            except Exception as exc:
+                logger.exception("Agent send failed for strategy %s", strategy.id)
+                last_result = AttackResult(
+                    attack_id=f"{strategy.id}-{attempted + 1}",
+                    strategy=strategy.id,
+                    category=strategy.category.value,
+                    payload=payload,
+                    outcome=AttackOutcome.INCONCLUSIVE,
+                    evidence=[],
+                    response_content=f"[agent error] {exc}",
+                    notes=f"agent error: {exc}",
+                )
+                self.session.results.append(last_result)
+                attempted += 1
+                continue
+
+            try:
+                result = self._evaluate(strategy, payload, response)
+            except Exception as exc:
+                logger.exception("Evaluation failed for strategy %s", strategy.id)
+                result = AttackResult(
+                    attack_id=f"{strategy.id}-{attempted + 1}",
+                    strategy=strategy.id,
+                    category=strategy.category.value,
+                    payload=payload,
+                    outcome=AttackOutcome.INCONCLUSIVE,
+                    evidence=[],
+                    response_content=getattr(response, "content", "") or "",
+                    notes=f"evaluation error: {exc}",
+                )
+
             self.session.results.append(result)
 
             if result.outcome == AttackOutcome.SUCCESS:
@@ -112,21 +168,25 @@ class RedTeamTester:
                     for e in result.evidence:
                         print(f"    evidence: {e}")
 
-                # Persist for regression suite
                 if self.persist_failures and self.store:
-                    stored = self.store.add(
-                        agent_name=self.session.agent_name,
-                        strategy_id=result.strategy,
-                        category=result.category,
-                        payload=result.payload,
-                        evidence=result.evidence,
-                        response_content=result.response_content,
-                        tool_calls=result.tool_calls_summary,
-                        notes=result.notes,
-                    )
-                    self.session.stored_failure_ids.append(stored.id)
-                    if self.verbose:
-                        print(f"    → saved as failure {stored.id}")
+                    try:
+                        stored = self.store.add(
+                            agent_name=self.session.agent_name,
+                            strategy_id=result.strategy,
+                            category=result.category,
+                            payload=result.payload,
+                            evidence=result.evidence,
+                            response_content=result.response_content,
+                            tool_calls=result.tool_calls_summary,
+                            notes=result.notes,
+                        )
+                        self.session.stored_failure_ids.append(stored.id)
+                        if self.verbose:
+                            print(f"    → saved as failure {stored.id}")
+                    except Exception as exc:
+                        logger.exception("Failed to persist failure for %s", strategy.id)
+                        if self.verbose:
+                            print(f"    → persist error: {exc}")
             else:
                 if self.verbose:
                     print("  ✓ Agent resisted / handled correctly")
@@ -142,32 +202,53 @@ class RedTeamTester:
     def replay_failure(self, failure_id: str) -> AttackResult | None:
         """Re-run a previously stored failure and update its status."""
         if not self.store:
+            logger.error("replay_failure called without a failure store")
             return None
-        stored = self.store.get(failure_id)
+
+        try:
+            stored = self.store.get(failure_id)
+        except Exception as exc:
+            logger.exception("Failed to load failure %s", failure_id)
+            return None
+
         if not stored:
             return None
 
-        self.agent.reset()
-        response = self.agent.send(stored.payload)
-        evidence = self.checker.check(response)
-        outcome = AttackOutcome.SUCCESS if evidence else AttackOutcome.FAILURE
+        try:
+            self.agent.reset()
+        except Exception as exc:
+            logger.warning("agent.reset() during replay failed: %s", exc)
 
-        result = AttackResult(
-            attack_id=f"replay-{failure_id}",
-            strategy=stored.strategy_id,
-            category=stored.category,
-            payload=stored.payload,
-            outcome=outcome,
-            evidence=evidence,
-            response_content=response.content,
-            tool_calls_summary=[
-                f"{tc.name}({tc.arguments}) → {tc.status.value}"
-                for tc in response.tool_calls
-            ],
-            notes=f"replay of {failure_id}; latency={response.latency_ms:.1f}ms",
-        )
+        try:
+            response = self.agent.send(stored.payload)
+            evidence = self.checker.check(response)
+            outcome = AttackOutcome.SUCCESS if evidence else AttackOutcome.FAILURE
 
-        self.store.mark_replay(failure_id, still_failing=(outcome == AttackOutcome.SUCCESS))
+            result = AttackResult(
+                attack_id=f"replay-{failure_id}",
+                strategy=stored.strategy_id,
+                category=stored.category,
+                payload=stored.payload,
+                outcome=outcome,
+                evidence=evidence,
+                response_content=response.content,
+                tool_calls_summary=[
+                    f"{tc.name}({tc.arguments}) → {tc.status.value}"
+                    for tc in response.tool_calls
+                ],
+                notes=f"replay of {failure_id}; latency={response.latency_ms:.1f}ms",
+            )
+        except Exception as exc:
+            logger.exception("Replay send/evaluate failed for %s", failure_id)
+            return None
+
+        try:
+            self.store.mark_replay(
+                failure_id, still_failing=(outcome == AttackOutcome.SUCCESS)
+            )
+        except Exception as exc:
+            logger.exception("Failed to mark replay for %s", failure_id)
+
         return result
 
     def _evaluate(

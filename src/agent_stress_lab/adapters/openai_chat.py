@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any
@@ -14,6 +15,8 @@ from agent_stress_lab.core.agent_adapter import (
     ToolCall,
     ToolCallStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIChatAdapter(AgentAdapter):
@@ -46,20 +49,22 @@ class OpenAIChatAdapter(AgentAdapter):
                 "Install with: pip install agent-stress-lab[llm]"
             ) from e
 
+        key = api_key or os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise ValueError(
+                "OPENAI_API_KEY is not set. Pass api_key= or set the environment variable."
+            )
+
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.tools = tools or self._default_tools_from_config()
-        self.client = OpenAI(
-            api_key=api_key or os.getenv("OPENAI_API_KEY"),
-            base_url=base_url,
-        )
+        self.client = OpenAI(api_key=key, base_url=base_url)
         self._messages: list[dict[str, Any]] = [
             {"role": "system", "content": config.system_prompt}
         ]
 
     def _default_tools_from_config(self) -> list[dict[str, Any]]:
-        """Minimal tool schemas based on the declared tool names."""
         schemas = []
         for name in self.config.tools:
             if name == "web_search":
@@ -72,7 +77,10 @@ class OpenAIChatAdapter(AgentAdapter):
                             "parameters": {
                                 "type": "object",
                                 "properties": {
-                                    "query": {"type": "string", "description": "Search query"}
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query",
+                                    }
                                 },
                                 "required": ["query"],
                             },
@@ -88,9 +96,7 @@ class OpenAIChatAdapter(AgentAdapter):
                             "description": "Save a research note",
                             "parameters": {
                                 "type": "object",
-                                "properties": {
-                                    "content": {"type": "string"}
-                                },
+                                "properties": {"content": {"type": "string"}},
                                 "required": ["content"],
                             },
                         },
@@ -130,65 +136,78 @@ class OpenAIChatAdapter(AgentAdapter):
             completion = self.client.chat.completions.create(**kwargs)
         except Exception as exc:
             latency = (time.perf_counter() - start) * 1000
+            # Roll back the user message so a retry is clean
+            if self._messages and self._messages[-1].get("role") == role:
+                self._messages.pop()
+            err_name = type(exc).__name__
+            logger.warning("OpenAI API error (%s): %s", err_name, exc)
             return AgentResponse(
-                content=f"[OpenAI adapter error] {exc}",
+                content=f"[OpenAI adapter error] {err_name}: {exc}",
                 latency_ms=latency,
-                raw={"error": str(exc)},
+                raw={"error": err_name, "detail": str(exc)},
             )
 
-        choice = completion.choices[0]
-        msg = choice.message
-        content = msg.content or ""
-        tool_calls: list[ToolCall] = []
+        try:
+            choice = completion.choices[0]
+            msg = choice.message
+            content = msg.content or ""
+            tool_calls: list[ToolCall] = []
 
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                args = {}
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {"raw": tc.function.arguments}
-                tool_calls.append(
-                    ToolCall(
-                        name=tc.function.name,
-                        arguments=args,
-                        status=ToolCallStatus.SUCCESS,
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    args: dict[str, Any] = {}
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {"raw": tc.function.arguments}
+                    tool_calls.append(
+                        ToolCall(
+                            name=tc.function.name,
+                            arguments=args,
+                            status=ToolCallStatus.SUCCESS,
+                        )
                     )
+                self._messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in msg.tool_calls
+                        ],
+                    }
                 )
-            # Keep conversation coherent for multi-turn
-            self._messages.append(
-                {
-                    "role": "assistant",
-                    "content": content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in msg.tool_calls
-                    ],
+            else:
+                self._messages.append({"role": "assistant", "content": content})
+
+            usage = {}
+            if completion.usage:
+                usage = {
+                    "prompt": completion.usage.prompt_tokens,
+                    "completion": completion.usage.completion_tokens,
+                    "total": completion.usage.total_tokens,
                 }
+
+            latency = (time.perf_counter() - start) * 1000
+            return AgentResponse(
+                content=content,
+                tool_calls=tool_calls,
+                raw={"finish_reason": choice.finish_reason, "model": self.model},
+                latency_ms=latency,
+                token_usage=usage,
             )
-        else:
-            self._messages.append({"role": "assistant", "content": content})
-
-        usage = {}
-        if completion.usage:
-            usage = {
-                "prompt": completion.usage.prompt_tokens,
-                "completion": completion.usage.completion_tokens,
-                "total": completion.usage.total_tokens,
-            }
-
-        latency = (time.perf_counter() - start) * 1000
-        return AgentResponse(
-            content=content,
-            tool_calls=tool_calls,
-            raw={"finish_reason": choice.finish_reason, "model": self.model},
-            latency_ms=latency,
-            token_usage=usage,
-        )
+        except Exception as exc:
+            latency = (time.perf_counter() - start) * 1000
+            logger.exception("Failed to parse OpenAI response")
+            return AgentResponse(
+                content=f"[OpenAI adapter error] Failed to parse response: {exc}",
+                latency_ms=latency,
+                raw={"error": "parse_error", "detail": str(exc)},
+            )
