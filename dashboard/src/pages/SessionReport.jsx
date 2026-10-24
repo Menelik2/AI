@@ -6,10 +6,17 @@ import { loadLastSession } from '../lib/api'
 
 export default function SessionReport({ onNavigate }) {
   const [session, setSession] = useState(null)
+  const [expanded, setExpanded] = useState(null)
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
     setSession(loadLastSession())
+    setReady(true)
   }, [])
+
+  if (!ready) {
+    return null
+  }
 
   if (!session) {
     return (
@@ -32,7 +39,6 @@ export default function SessionReport({ onNavigate }) {
 
   const metrics = session.metrics || {}
   const attacks = session.attacks || []
-  const [expanded, setExpanded] = useState(null)
 
   return (
     <div className="space-y-6 animate-fade-in">
