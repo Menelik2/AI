@@ -10,3 +10,10 @@ __all__ = [
     "create_adapter",
     "list_adapters",
 ]
+
+try:
+    from agent_stress_lab.adapters.anthropic_chat import AnthropicChatAdapter
+
+    __all__.append("AnthropicChatAdapter")
+except ImportError:
+    pass
