@@ -1,9 +1,11 @@
 /**
  * Client for Agent Stress Lab FastAPI backend.
- * Set VITE_API_URL (default http://127.0.0.1:8000).
+ *
+ * Production (Vercel Services): same-origin `/api`.
+ * Local override: set VITE_API_URL (e.g. http://127.0.0.1:8000).
  */
 
-const BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const BASE = import.meta.env.VITE_API_URL || '/api'
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -40,6 +42,10 @@ export async function runSession(body) {
 
 export async function listFailures(limit = 50) {
   return request(`/failures?limit=${limit}`)
+}
+
+export async function getFailure(id) {
+  return request(`/failures/${id}`)
 }
 
 export async function replayFailure(id, body = { adapter: 'mock' }) {

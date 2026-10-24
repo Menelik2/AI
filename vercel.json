@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "dashboard": {
+      "root": "dashboard",
+      "framework": "vite"
+    },
+    "api": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "src/agent_stress_lab/api:app"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": { "service": "api" }
+    },
+    {
+      "source": "/(.*)",
+      "destination": { "service": "dashboard" }
+    }
+  ]
+}
