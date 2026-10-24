@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+  body {
+    @apply min-h-screen;
+  }
+  ::selection {
+    @apply bg-accent/40 text-white;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-white/[0.06] bg-surface-900 shadow-card;
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:border-white/[0.1] hover:bg-surface-850;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
+           transition-all duration-150 focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-950
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-soft active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-zinc-300 hover:bg-white/[0.06] hover:text-white;
+  }
+  .btn-outline {
+    @apply btn border border-white/[0.1] text-zinc-200 hover:bg-white/[0.04];
+  }
+  .badge {
+    @apply inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium;
+  }
+  .badge-danger {
+    @apply badge bg-accent-muted text-rose-300;
+  }
+  .badge-success {
+    @apply badge bg-success-muted text-emerald-300;
+  }
+  .badge-warn {
+    @apply badge bg-warn-muted text-amber-300;
+  }
+  .badge-neutral {
+    @apply badge bg-white/[0.06] text-zinc-400;
+  }
+  .input {
+    @apply w-full rounded-lg border border-white/[0.08] bg-surface-850 px-3 py-2 text-sm
+           text-zinc-100 placeholder:text-zinc-500
+           focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/30;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wider text-zinc-500;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
