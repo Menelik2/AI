@@ -7,15 +7,32 @@
 
 const BASE = import.meta.env.VITE_API_URL || '/api'
 
+const SESSION_KEY = 'asl_last_session'
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   })
   if (!res.ok) {
-    const body = await res.text()
-    throw new Error(body || res.statusText)
+    let message = res.statusText
+    try {
+      const body = await res.json()
+      message = body.detail
+        ? typeof body.detail === 'string'
+          ? body.detail
+          : JSON.stringify(body.detail)
+        : JSON.stringify(body)
+    } catch {
+      try {
+        message = await res.text()
+      } catch {
+        /* keep statusText */
+      }
+    }
+    throw new Error(message || res.statusText)
   }
+  if (res.status === 204) return null
   return res.json()
 }
 
@@ -28,12 +45,14 @@ export async function healthCheck() {
 }
 
 export async function listAdapters() {
-  return request('/adapters')
+  const data = await request('/adapters')
+  return data.adapters || data || []
 }
 
 export async function listAttacks(category) {
   const q = category ? `?category=${encodeURIComponent(category)}` : ''
-  return request(`/attacks${q}`)
+  const data = await request(`/attacks${q}`)
+  return data.attacks || data || []
 }
 
 export async function runSession(body) {
@@ -41,7 +60,11 @@ export async function runSession(body) {
 }
 
 export async function listFailures(limit = 50) {
-  return request(`/failures?limit=${limit}`)
+  const data = await request(`/failures?limit=${limit}`)
+  return {
+    total: data.total ?? (data.failures || []).length,
+    failures: data.failures || data || [],
+  }
 }
 
 export async function getFailure(id) {
@@ -53,6 +76,23 @@ export async function replayFailure(id, body = { adapter: 'mock' }) {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+export function saveLastSession(session) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  } catch {
+    /* private mode */
+  }
+}
+
+export function loadLastSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
 }
 
 export { BASE as API_BASE }

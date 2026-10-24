@@ -1,10 +1,37 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CheckCircle2, XCircle, ChevronDown, ChevronRight, Clock } from 'lucide-react'
 import clsx from 'clsx'
-import { recentSession, categoryColors } from '../lib/mockData'
+import { categoryColors } from '../lib/mockData'
+import { loadLastSession } from '../lib/api'
 
-export default function SessionReport() {
-  const { metrics, attacks, agent, generated_at } = recentSession
+export default function SessionReport({ onNavigate }) {
+  const [session, setSession] = useState(null)
+
+  useEffect(() => {
+    setSession(loadLastSession())
+  }, [])
+
+  if (!session) {
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">Last Session</h1>
+          <p className="mt-1 text-sm text-zinc-500">No session stored in this browser yet.</p>
+        </header>
+        <div className="card flex flex-col items-center gap-3 px-6 py-16 text-center">
+          <p className="text-sm text-zinc-500">
+            Run a red-team session to generate a report. Results are saved locally after each run.
+          </p>
+          <button onClick={() => onNavigate?.('run')} className="btn-primary text-sm">
+            Run a test
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const metrics = session.metrics || {}
+  const attacks = session.attacks || []
   const [expanded, setExpanded] = useState(null)
 
   return (
@@ -13,9 +40,11 @@ export default function SessionReport() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">Last Session</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Target <span className="font-mono text-zinc-400">{agent}</span>
+            Target <span className="font-mono text-zinc-400">{session.agent}</span>
             <span className="mx-2 text-zinc-700">·</span>
-            {new Date(generated_at).toLocaleString()}
+            {session.generated_at
+              ? new Date(session.generated_at).toLocaleString()
+              : '—'}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -26,11 +55,23 @@ export default function SessionReport() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {[
-          { label: 'Total', value: metrics.total_attacks },
-          { label: 'Violations', value: metrics.successful_attacks, tone: 'danger' },
-          { label: 'Success rate', value: `${(metrics.attack_success_rate * 100).toFixed(0)}%`, tone: 'danger' },
-          { label: 'Resisted', value: metrics.resisted_attacks, tone: 'success' },
-          { label: 'Strategies', value: metrics.unique_strategies_used },
+          { label: 'Total', value: metrics.total_attacks ?? attacks.length },
+          {
+            label: 'Violations',
+            value: metrics.successful_attacks ?? 0,
+            tone: 'danger',
+          },
+          {
+            label: 'Success rate',
+            value: `${((metrics.attack_success_rate ?? 0) * 100).toFixed(0)}%`,
+            tone: 'danger',
+          },
+          {
+            label: 'Resisted',
+            value: metrics.resisted_attacks ?? 0,
+            tone: 'success',
+          },
+          { label: 'Strategies', value: metrics.unique_strategies_used ?? '—' },
         ].map((m) => (
           <div key={m.label} className="card px-4 py-3">
             <div className="label !mb-0">{m.label}</div>
@@ -77,7 +118,7 @@ export default function SessionReport() {
                           categoryColors[a.category] || 'badge-neutral'
                         }`}
                       >
-                        {a.category.replace(/_/g, ' ')}
+                        {(a.category || '').replace(/_/g, ' ')}
                       </span>
                       <span className={success ? 'badge-danger' : 'badge-success'}>
                         {success ? 'violation' : 'resisted'}
@@ -124,6 +165,9 @@ export default function SessionReport() {
               </li>
             )
           })}
+          {attacks.length === 0 && (
+            <li className="px-5 py-12 text-center text-sm text-zinc-500">No attacks in this session</li>
+          )}
         </ul>
       </div>
     </div>

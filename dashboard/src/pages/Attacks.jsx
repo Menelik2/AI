@@ -1,30 +1,72 @@
-import { useState } from 'react'
-import { Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Search, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
-import { attackStrategies, categoryColors, severityColors } from '../lib/mockData'
-
-const categories = [...new Set(attackStrategies.map((s) => s.category))]
+import { categoryColors, severityColors } from '../lib/mockData'
+import { listAttacks } from '../lib/api'
 
 export default function Attacks() {
   const [query, setQuery] = useState('')
   const [cat, setCat] = useState('all')
+  const [strategies, setStrategies] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
-  const filtered = attackStrategies.filter((s) => {
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await listAttacks()
+        if (!cancelled) setStrategies(Array.isArray(data) ? data : [])
+      } catch (e) {
+        if (!cancelled) setError(e.message || 'Failed to load attacks')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const categories = [...new Set(strategies.map((s) => s.category))]
+
+  const filtered = strategies.filter((s) => {
     const q = query.toLowerCase()
     const matchQ =
-      !q || s.id.includes(q) || s.name.toLowerCase().includes(q) || s.category.includes(q)
+      !q ||
+      (s.id || '').includes(q) ||
+      (s.name || '').toLowerCase().includes(q) ||
+      (s.category || '').includes(q)
     const matchC = cat === 'all' || s.category === cat
     return matchQ && matchC
   })
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-zinc-500">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Loading attack library…
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight text-white">Attack Library</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {attackStrategies.length} registered strategies across {categories.length} categories
+          {strategies.length} registered strategies
+          {categories.length ? ` across ${categories.length} categories` : ''}
         </p>
       </header>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
 
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
@@ -69,16 +111,23 @@ export default function Attacks() {
               <span className={severityColors[s.severity] || 'badge-neutral'}>{s.severity}</span>
             </div>
             <h3 className="mt-2 text-sm font-medium text-zinc-100">{s.name}</h3>
+            {s.description && (
+              <p className="mt-1 line-clamp-2 text-[11px] text-zinc-500">{s.description}</p>
+            )}
             <div className="mt-3">
-              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${categoryColors[s.category] || 'badge-neutral'}`}>
-                {s.category.replace(/_/g, ' ')}
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                  categoryColors[s.category] || 'badge-neutral'
+                }`}
+              >
+                {(s.category || '').replace(/_/g, ' ')}
               </span>
             </div>
           </div>
         ))}
       </div>
 
-      {filtered.length === 0 && (
+      {filtered.length === 0 && !error && (
         <div className="py-16 text-center text-sm text-zinc-500">No strategies match</div>
       )}
     </div>

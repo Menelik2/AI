@@ -1,23 +1,47 @@
-import { useState } from 'react'
-import { RefreshCw, Trash2, Search, Filter } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { RefreshCw, Search, Filter, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
-import { storedFailures, categoryColors } from '../lib/mockData'
+import { categoryColors } from '../lib/mockData'
+import { listFailures, replayFailure } from '../lib/api'
 
 export default function Failures() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState(null)
   const [replaying, setReplaying] = useState(null)
-  const [rows, setRows] = useState(storedFailures)
+  const [rows, setRows] = useState([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [replayMsg, setReplayMsg] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await listFailures(100)
+      setRows(data.failures || [])
+      setTotal(data.total ?? (data.failures || []).length)
+    } catch (e) {
+      setError(e.message || 'Failed to load failures')
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
 
   const filtered = rows.filter((f) => {
     const q = query.toLowerCase()
     const matchQ =
       !q ||
-      f.strategy_id.includes(q) ||
-      f.category.includes(q) ||
-      f.id.includes(q) ||
-      f.agent_name.toLowerCase().includes(q)
+      (f.strategy_id || '').includes(q) ||
+      (f.category || '').includes(q) ||
+      (f.id || '').includes(q) ||
+      (f.agent_name || '').toLowerCase().includes(q)
     const matchF =
       filter === 'all' ||
       (filter === 'open' && f.still_failing !== false) ||
@@ -25,33 +49,79 @@ export default function Failures() {
     return matchQ && matchF
   })
 
-  const handleReplay = (id) => {
+  const handleReplay = async (id) => {
     setReplaying(id)
-    setTimeout(() => {
+    setReplayMsg(null)
+    try {
+      const result = await replayFailure(id, { adapter: 'mock' })
       setRows((prev) =>
         prev.map((f) =>
           f.id === id
             ? {
                 ...f,
-                replay_count: f.replay_count + 1,
-                last_replayed_at: new Date().toISOString(),
-                still_failing: Math.random() > 0.4,
+                replay_count: result.replay_count ?? f.replay_count + 1,
+                last_replayed_at: result.last_replayed_at || new Date().toISOString(),
+                still_failing: result.still_failing,
+                evidence: result.evidence?.length ? result.evidence : f.evidence,
               }
             : f
         )
       )
+      setSelected((prev) =>
+        prev?.id === id
+          ? {
+              ...prev,
+              still_failing: result.still_failing,
+              replay_count: result.replay_count ?? prev.replay_count + 1,
+              evidence: result.evidence?.length ? result.evidence : prev.evidence,
+            }
+          : prev
+      )
+      setReplayMsg(
+        result.still_failing
+          ? 'Still failing — policy violation still present'
+          : 'Fixed — agent now resists this attack'
+      )
+    } catch (e) {
+      setReplayMsg(e.message || 'Replay failed')
+    } finally {
       setReplaying(null)
-    }, 1200)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-zinc-500">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Loading failures…
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Failure DB</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          Confirmed policy violations · replay as regression suite
-        </p>
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">Failure DB</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            Confirmed policy violations · {total} total · replay as regression suite
+          </p>
+        </div>
+        <button onClick={load} className="btn-ghost text-xs">
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
       </header>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
+      {replayMsg && (
+        <div className="rounded-lg border border-white/[0.08] bg-surface-850 px-4 py-3 text-sm text-zinc-300">
+          {replayMsg}
+        </div>
+      )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
@@ -170,7 +240,7 @@ export default function Failures() {
                     categoryColors[selected.category] || 'badge-neutral'
                   }`}
                 >
-                  {selected.category.replace(/_/g, ' ')}
+                  {(selected.category || '').replace(/_/g, ' ')}
                 </span>
               </div>
               <div>
@@ -205,9 +275,6 @@ export default function Failures() {
                     className={clsx('h-3.5 w-3.5', replaying === selected.id && 'animate-spin')}
                   />
                   Replay
-                </button>
-                <button className="btn-ghost text-xs text-zinc-500">
-                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>

@@ -23,7 +23,14 @@ DEFAULT_POLICY = [
 
 
 def list_adapters() -> list[str]:
-    return ["mock", "openai", "anthropic", "http"]
+    names = ["mock", "openai", "http"]
+    try:
+        from agent_stress_lab.adapters.anthropic_chat import AnthropicChatAdapter  # noqa: F401
+
+        names.insert(2, "anthropic")
+    except ImportError:
+        pass
+    return names
 
 
 def _default_config(name: str, secrets: list[str] | None = None) -> AgentConfig:
@@ -51,14 +58,19 @@ def create_adapter(
         from agent_stress_lab.adapters.openai_chat import OpenAIChatAdapter
 
         if config is None:
-            config = _default_config("OpenAIResearchAgent", kwargs.pop("secrets", []))
+            config = _default_config("OpenAIResearchAgent", kwargs.pop("secrets", None))
         return OpenAIChatAdapter(config, **kwargs)
 
     if name in ("anthropic", "claude"):
-        from agent_stress_lab.adapters.anthropic_chat import AnthropicChatAdapter
-
+        try:
+            from agent_stress_lab.adapters.anthropic_chat import AnthropicChatAdapter
+        except ImportError as e:
+            raise ImportError(
+                "Anthropic adapter is not available. "
+                "Add anthropic_chat.py or use mock/openai/http."
+            ) from e
         if config is None:
-            config = _default_config("AnthropicResearchAgent", kwargs.pop("secrets", []))
+            config = _default_config("AnthropicResearchAgent", kwargs.pop("secrets", None))
         return AnthropicChatAdapter(config, **kwargs)
 
     if name in ("http", "webhook", "endpoint"):
@@ -68,7 +80,7 @@ def create_adapter(
         if not endpoint:
             raise ValueError("HTTP adapter requires endpoint=...")
         if config is None:
-            raise ValueError("HTTP adapter requires an AgentConfig")
+            config = _default_config("HTTPAgent", kwargs.pop("secrets", None))
         return BaseHTTPAdapter(config, endpoint=endpoint, **kwargs)
 
     raise ValueError(f"Unknown adapter '{name}'. Available: {list_adapters()}")

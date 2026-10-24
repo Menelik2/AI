@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Play, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import clsx from 'clsx'
+import { runSession, saveLastSession } from '../lib/api'
 
 const adapters = [
   { id: 'mock', label: 'Mock Research Agent', desc: 'Deterministic sandbox (default)' },
-  { id: 'openai', label: 'OpenAI Chat', desc: 'Requires OPENAI_API_KEY' },
+  { id: 'openai', label: 'OpenAI Chat', desc: 'Requires OPENAI_API_KEY on the server' },
   { id: 'http', label: 'HTTP / Webhook', desc: 'Any JSON agent endpoint' },
 ]
 
@@ -27,34 +28,64 @@ export default function RunTest({ onNavigate }) {
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState([])
   const [done, setDone] = useState(false)
+  const [error, setError] = useState(null)
 
-  const start = () => {
+  const pushLog = (msg, ok = true) => {
+    setLog((prev) => [...prev, { msg, ok }])
+  }
+
+  const start = async () => {
     setRunning(true)
     setDone(false)
     setLog([])
-    const steps = [
-      { t: 400, msg: `Connecting adapter: ${adapter}`, ok: true },
-      { t: 900, msg: 'Loading attack strategies…', ok: true },
-      { t: 1400, msg: category ? `Filtering category: ${category}` : 'Using all categories', ok: true },
-      { t: 2000, msg: '→ Attack [inj_hypothetical] Hypothetical / Audit Framing', ok: true },
-      { t: 2600, msg: '  ✓ Agent resisted', ok: true },
-      { t: 3200, msg: '→ Attack [tool_injection] Tool Argument Injection', ok: true },
-      { t: 3800, msg: '  ✗ POLICY VIOLATION detected', ok: false },
-      { t: 4200, msg: '    evidence: Secret leaked in response…', ok: false },
-      { t: 4600, msg: '    → saved as failure a1b2c3d4-e5f', ok: false },
-      { t: 5200, msg: '→ Attack [social_urgency] Urgency / Incident Framing', ok: true },
-      { t: 5800, msg: '  ✓ Agent resisted', ok: true },
-      { t: 6400, msg: 'Session complete. 1 violation of 4 attacks.', ok: true },
-    ]
-    steps.forEach(({ t, msg, ok }) => {
-      setTimeout(() => {
-        setLog((prev) => [...prev, { msg, ok }])
-        if (t === 6400) {
-          setRunning(false)
-          setDone(true)
+    setError(null)
+
+    pushLog(`Connecting adapter: ${adapter}`, true)
+    pushLog('Starting adaptive red-team session…', true)
+
+    const body = {
+      adapter,
+      max_attacks: maxAttacks,
+      persist: true,
+    }
+    if (category) body.category = category
+    if (seed !== '') body.seed = Number(seed)
+    if (adapter === 'http') body.endpoint = endpoint
+
+    try {
+      const session = await runSession(body)
+      saveLastSession(session)
+
+      const attacks = session.attacks || []
+      for (const a of attacks) {
+        const ok = a.outcome !== 'success'
+        pushLog(`→ Attack [${a.strategy}] ${a.category}`, true)
+        if (ok) {
+          pushLog('  ✓ Agent resisted', true)
+        } else {
+          pushLog('  ✗ POLICY VIOLATION detected', false)
+          for (const e of a.evidence || []) {
+            pushLog(`    evidence: ${e}`, false)
+          }
         }
-      }, t)
-    })
+      }
+
+      const m = session.metrics || {}
+      pushLog(
+        `Session complete. ${m.successful_attacks ?? 0} violation(s) of ${m.total_attacks ?? attacks.length} attacks.`,
+        true
+      )
+      if (session.stored_failure_ids?.length) {
+        pushLog(`Saved ${session.stored_failure_ids.length} failure(s) to DB.`, false)
+      }
+      setDone(true)
+    } catch (e) {
+      const msg = e.message || 'Run failed'
+      setError(msg)
+      pushLog(`Error: ${msg}`, false)
+    } finally {
+      setRunning(false)
+    }
   }
 
   return (
@@ -65,6 +96,12 @@ export default function RunTest({ onNavigate }) {
           Launch an adaptive red-team session against a target agent
         </p>
       </header>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-5">
         <div className="card space-y-5 p-5 lg:col-span-2">
