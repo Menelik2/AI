@@ -70,11 +70,7 @@ export default function Attacks() {
             </div>
             <h3 className="mt-2 text-sm font-medium text-zinc-100">{s.name}</h3>
             <div className="mt-3">
-              <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                  categoryColors[s.category] || 'badge-neutral'
-                }`}
-              >
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${categoryColors[s.category] || 'badge-neutral'}`}>
                 {s.category.replace(/_/g, ' ')}
               </span>
             </div>
