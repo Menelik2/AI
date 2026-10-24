@@ -52,9 +52,7 @@ export default function Attacks() {
               onClick={() => setCat(c)}
               className={clsx(
                 'rounded-md px-2.5 py-1.5 text-xs font-medium capitalize',
-                cat === c
-                  ? categoryColors[c]
-                  : 'text-zinc-500 hover:text-zinc-300'
+                cat === c ? categoryColors[c] : 'text-zinc-500 hover:text-zinc-300'
               )}
             >
               {c.replace(/_/g, ' ')}
